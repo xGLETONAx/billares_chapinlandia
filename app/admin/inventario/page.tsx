@@ -23,8 +23,7 @@ import { toast } from "sonner"
 
 export default function InventarioPage() {
   const productos = useCatalogStore((s) => s.getProductosActivos())
-  const addMovimiento = useCatalogStore((s) => s.addMovimiento)
-  const getStockActual = useCatalogStore((s) => s.getStockActual)
+  const registrarMovimiento = useCatalogStore((s) => s.registrarMovimiento)
   const getKardex = useCatalogStore((s) => s.getKardex)
 
   const [activeTab, setActiveTab] = useState<"stock" | "kardex">("stock")
@@ -37,7 +36,7 @@ export default function InventarioPage() {
 
   const productosConStock = productos.map((p) => ({
     ...p,
-    stock: getStockActual(p.id),
+    stock: p.stockActual ?? 0,
   }))
 
   const productosFiltrados = productosConStock.filter(
@@ -63,7 +62,8 @@ export default function InventarioPage() {
       toast.error("Selecciona un producto")
       return
     }
-    if (!cantidad || Number(cantidad) <= 0) {
+    const cantidadNumber = Number(cantidad)
+    if (!cantidad || Number.isNaN(cantidadNumber) || cantidadNumber <= 0) {
       toast.error("Ingresa una cantidad válida")
       return
     }
@@ -75,15 +75,15 @@ export default function InventarioPage() {
     const producto = productos.find((p) => p.id === productoSeleccionado)
     if (!producto) return
 
-    addMovimiento({
-      id: `mov-${Date.now()}`,
-      producto_id: productoSeleccionado,
-      producto_nombre: producto.nombre,
-      tipo: tipoMovimiento,
-      cantidad: Number(cantidad),
-      motivo: motivo.trim(),
-      fecha: new Date().toISOString(),
+    const cantidadAjustada = tipoMovimiento === "entrada" ? Math.abs(cantidadNumber) : -Math.abs(cantidadNumber)
+
+    registrarMovimiento({
+      productoId: productoSeleccionado,
+      fechaISO: new Date().toISOString(),
+      tipo: "ajuste",
+      cantidad: cantidadAjustada,
       usuario: "Operador",
+      observacion: motivo.trim(),
     })
 
     toast.success(`Movimiento de ${tipoMovimiento} registrado correctamente`)
@@ -129,9 +129,11 @@ export default function InventarioPage() {
       (m) =>
         m.producto_nombre.toLowerCase().includes(busqueda.toLowerCase()) ||
         m.producto_codigo?.toLowerCase().includes(busqueda.toLowerCase()) ||
-        m.motivo.toLowerCase().includes(busqueda.toLowerCase()),
+        m.motivo_texto?.toLowerCase().includes(busqueda.toLowerCase()) ||
+        m.observacion?.toLowerCase().includes(busqueda.toLowerCase()) ||
+        m.referencia?.toLowerCase().includes(busqueda.toLowerCase()),
     )
-    .sort((a, b) => new Date(b.fecha).getTime() - new Date(a.fecha).getTime())
+    .sort((a, b) => new Date(b.fechaISO).getTime() - new Date(a.fechaISO).getTime())
 
   return (
     <div className="max-w-7xl mx-auto">
@@ -280,45 +282,56 @@ export default function InventarioPage() {
                       </TableCell>
                     </TableRow>
                   ) : (
-                    kardexFiltrado.map((movimiento) => (
-                      <TableRow key={movimiento.id}>
-                        <TableCell className="font-mono text-sm">
-                          {new Date(movimiento.fecha).toLocaleString("es-GT", {
-                            year: "numeric",
-                            month: "2-digit",
-                            day: "2-digit",
-                            hour: "2-digit",
-                            minute: "2-digit",
-                          })}
-                        </TableCell>
-                        <TableCell>
-                          <div>
-                            <div className="font-medium">{movimiento.producto_nombre}</div>
-                            {movimiento.producto_codigo && (
-                              <div className="text-xs text-muted-foreground">{movimiento.producto_codigo}</div>
+                    kardexFiltrado.map((movimiento) => {
+                      const esEntrada = movimiento.cantidad >= 0
+                      const motivoDescripcion =
+                        movimiento.motivo_texto ||
+                        movimiento.observacion ||
+                        (movimiento.tipo === "venta" ? "Venta/Consumo" : "Ajuste de inventario")
+
+                      return (
+                        <TableRow key={movimiento.id}>
+                          <TableCell className="font-mono text-sm">
+                            {new Date(movimiento.fechaISO).toLocaleString("es-GT", {
+                              year: "numeric",
+                              month: "2-digit",
+                              day: "2-digit",
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            })}
+                          </TableCell>
+                          <TableCell>
+                            <div>
+                              <div className="font-medium">{movimiento.producto_nombre}</div>
+                              {movimiento.producto_codigo && (
+                                <div className="text-xs text-muted-foreground">{movimiento.producto_codigo}</div>
+                              )}
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            {esEntrada ? (
+                              <Badge variant="default" className="bg-success text-success-foreground gap-1">
+                                <TrendingUp className="w-3 h-3" />
+                                Entrada
+                              </Badge>
+                            ) : (
+                              <Badge variant="secondary" className="gap-1">
+                                <TrendingDown className="w-3 h-3" />
+                                Salida
+                              </Badge>
                             )}
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          {movimiento.tipo === "entrada" ? (
-                            <Badge variant="default" className="bg-success text-success-foreground gap-1">
-                              <TrendingUp className="w-3 h-3" />
-                              Entrada
-                            </Badge>
-                          ) : (
-                            <Badge variant="secondary" className="gap-1">
-                              <TrendingDown className="w-3 h-3" />
-                              Salida
-                            </Badge>
-                          )}
-                        </TableCell>
-                        <TableCell className="text-center">
-                          <span className="font-bold">{movimiento.cantidad}</span>
-                        </TableCell>
-                        <TableCell className="text-sm">{movimiento.motivo}</TableCell>
-                        <TableCell className="text-sm text-muted-foreground">{movimiento.usuario}</TableCell>
-                      </TableRow>
-                    ))
+                          </TableCell>
+                          <TableCell className="text-center">
+                            <span className={`font-bold ${esEntrada ? "text-green-600" : "text-red-600"}`}>
+                              {esEntrada ? "+" : "-"}
+                              {Math.abs(movimiento.cantidad)}
+                            </span>
+                          </TableCell>
+                          <TableCell className="text-sm">{motivoDescripcion}</TableCell>
+                          <TableCell className="text-sm text-muted-foreground">{movimiento.usuario}</TableCell>
+                        </TableRow>
+                      )
+                    })
                   )}
                 </TableBody>
               </Table>
@@ -364,7 +377,9 @@ export default function InventarioPage() {
                     <SelectItem key={producto.id} value={producto.id}>
                       <div className="flex items-center justify-between w-full">
                         <span>{producto.nombre}</span>
-                        <span className="ml-4 text-xs text-muted-foreground">Stock: {getStockActual(producto.id)}</span>
+                        <span className="ml-4 text-xs text-muted-foreground">
+                          Stock: {producto.stockActual ?? 0}
+                        </span>
                       </div>
                     </SelectItem>
                   ))}
@@ -376,7 +391,7 @@ export default function InventarioPage() {
               <Label htmlFor="form-tipo">
                 Tipo de movimiento <span className="text-destructive">*</span>
               </Label>
-              <Select value={tipoMovimiento} onValueChange={(val: any) => setTipoMovimiento(val)}>
+              <Select value={tipoMovimiento} onValueChange={(val) => setTipoMovimiento(val as "entrada" | "salida")}>
                 <SelectTrigger id="form-tipo">
                   <SelectValue />
                 </SelectTrigger>
